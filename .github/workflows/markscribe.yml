@@ -1,30 +1,44 @@
 name: markscribe
-
 on:
   push:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
-
 jobs:
   markscribe:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+    concurrency:
+      group: profile-update-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v7.0.1
+        with:
+          # Read the current branch tip after waiting for the other profile job.
+          ref: ${{ github.ref_name }}
+
+      - name: Test README renderer
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      
+      - name: Fetch RSS Feed
+        run: |
+          curl --fail --location --silent --show-error --retry 3 --max-time 60 \
+            -A "Mozilla/5.0" \
+            -H "Accept: application/rss+xml, application/xml, text/xml" \
+            https://christitus.com/index.xml --output "$RUNNER_TEMP/rss-feed.xml"
+          mv "$RUNNER_TEMP/rss-feed.xml" rss-feed.xml
 
       - name: Generate README
-        uses: muesli/readme-scribe@master
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-        with:
-          template: 'README.gtpl'
-          writeTo: 'README.md'
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          python3 .github/scripts/render-readme.py README.gtpl "$RUNNER_TEMP/README.md"
+          mv "$RUNNER_TEMP/README.md" README.md
 
       - name: Commit README
-        uses: stefanzweifel/git-auto-commit-action@v4
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        uses: stefanzweifel/git-auto-commit-action@v7.2.0
         with:
           commit_message: 'markscribe: update README.md'
+          file_pattern: 'README.md rss-feed.xml'
